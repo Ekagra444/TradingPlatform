@@ -34,6 +34,11 @@ A production-ready event-driven trading platform for real-time cryptocurrency tr
 - PostgreSQL database (free tier at [neon.tech](https://neon.tech))
 - Redis instance (free tier at [redis.com](https://redis.com/try-free/))
 
+## Sample Dashboard
+
+![Trading Dashboard Candlestick](public/candleStick.png)
+![Trading Dashboard Line chart](public/lineChart.png)
+
 ### 1. Clone & Install
 
 ```bash
