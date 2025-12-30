@@ -2,8 +2,8 @@ Complete internal documentation for future reference and maintenance
 # Real-Time Trading Platform - Architecture Documentation
 
 **For**: Internal reference and future maintenance
-**Last Updated**: January 2025
-**Author**: Development Team
+**Last Updated**: December 2025
+**Author**: EKAGRA AGRAWAL
 
 ## Table of Contents
 
