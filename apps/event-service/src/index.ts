@@ -6,6 +6,7 @@ import { createClient } from "redis"
 import { pool } from "./db"
 import { EventType } from "@trading-platform/shared"
 import { CandlestickAggregator }  from "./candlestick-aggregator"
+import { OrderBookManager } from "./order-book-manager"
 dotenv.config()
 
 const app = express()
@@ -43,12 +44,22 @@ app.get("/health", (req, res) => {
   res.json({ status: "healthy", service: "event-service" })
 })
 
+const orderBookManager = new OrderBookManager("BTCUSDT")
+
 // Store connected clients
 const clients = new Set<WebSocket>()
 
 wss.on("connection", (ws: WebSocket) => {
   console.log("New WebSocket connection")
   clients.add(ws)
+  const orderBook = orderBookManager.getOrderBook()
+
+  ws.send(
+    JSON.stringify({
+      type: "ORDER_BOOK_SNAPSHOT",
+      data: orderBook,
+    }),
+  )
 
   ws.on("close", () => {
     console.log("WebSocket connection closed")
@@ -187,6 +198,9 @@ async function start() {
 
     console.log("Connected to Redis")
 
+    await orderBookManager.initialize()
+    orderBookManager.connectDepthStream()    
+
     // Subscribe to order events
     await redisSub.subscribe("order:events", async (message) => {
       const event = JSON.parse(message)
@@ -196,6 +210,12 @@ async function start() {
       broadcast({
         type: event.type,
         data: event,
+      })
+
+      const orderBook = orderBookManager.getOrderBook()
+      broadcast({
+        type: "ORDER_BOOK_UPDATE",
+        data: orderBook,
       })
 
       // Store event in database
