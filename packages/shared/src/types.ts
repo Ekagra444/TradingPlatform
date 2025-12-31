@@ -44,6 +44,7 @@ export enum EventType {
   ORDER_REJECTED = "ORDER_REJECTED",
   TRADE_EXECUTED = "TRADE_EXECUTED",
   PRICE_UPDATE = "PRICE_UPDATE",
+  ORDER_PLACED="ORDER_PLACED"
 }
 
 export interface BaseEvent {

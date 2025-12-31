@@ -10,6 +10,7 @@ dotenv.config()
 const app = express()
 const PORT = process.env.PORT || 4001
 
+// ---Redis Connection--- 
 const redisPub = createClient({
   username: "default",
   password: process.env.redisPassword,
@@ -31,7 +32,10 @@ const redisSub = createClient({
 redisPub.on("error", (err) => console.error("Redis Pub Error", err))
 redisSub.on("error", (err) => console.error("Redis Sub Error", err))
 
+
 let currentPrice = 0
+
+let orderBook = { bids: [], asks: [] }
 
 app.use(express.json())
 
@@ -39,9 +43,145 @@ app.get("/health", (req, res) => {
   res.json({ status: "healthy", service: "execution-service" })
 })
 
+async function checkAndFillLimitOrders(price: number) {
+  try {
+    // Check BUY limit orders (fill when price drops below limit)
+    const buyOrders = await pool.query(
+      "SELECT * FROM limit_orders WHERE side = 'BUY' AND status = 'OPEN' AND price >= $1",
+      [price],
+    )
+
+    for (const order of buyOrders.rows) {
+      await fillLimitOrder(order, price)
+    }
+
+    // Check SELL limit orders (fill when price rises above limit)
+    const sellOrders = await pool.query(
+      "SELECT * FROM limit_orders WHERE side = 'SELL' AND status = 'OPEN' AND price <= $1",
+      [price],
+    )
+
+    for (const order of sellOrders.rows) {
+      await fillLimitOrder(order, price)
+    }
+  } catch (error) {
+    console.error("Error checking limit orders:", error)
+  }
+}
+
+async function fillLimitOrder(order: any, executedPrice: number) {
+  const client = await pool.connect()
+  try {
+    await client.query("BEGIN")
+
+    const quantity = Number.parseFloat(order.quantity)
+    const filledQuantity = Number.parseFloat(order.filled_quantity)
+    const remainingQuantity = quantity - filledQuantity
+    const totalCost = executedPrice * remainingQuantity
+
+    // Get user balance
+    const userResult = await client.query("SELECT balance, btc_balance FROM users WHERE id = $1 FOR UPDATE", [
+      order.user_id,
+    ])
+
+    if (userResult.rows.length === 0) throw new Error("User not found")
+
+    const user = userResult.rows[0]
+    const balance = Number.parseFloat(user.balance)
+    const btcBalance = Number.parseFloat(user.btc_balance)
+
+    // Validate balance
+    if (order.side === OrderSide.BUY && balance < totalCost) {
+      throw new Error("Insufficient balance")
+    }
+
+    if (order.side === OrderSide.SELL && btcBalance < remainingQuantity) {
+      throw new Error("Insufficient BTC balance")
+    }
+
+    // Update balances
+    if (order.side === OrderSide.BUY) {
+      await client.query("UPDATE users SET balance = balance - $1, btc_balance = btc_balance + $2 WHERE id = $3", [
+        totalCost,
+        remainingQuantity,
+        order.user_id,
+      ])
+    } else {
+      await client.query("UPDATE users SET balance = balance + $1, btc_balance = btc_balance - $2 WHERE id = $3", [
+        totalCost,
+        remainingQuantity,
+        order.user_id,
+      ])
+    }
+
+    // Update limit order
+    await client.query(
+      "UPDATE limit_orders SET filled_quantity = quantity, status = 'FILLED', updated_at = NOW() WHERE id = $1",
+      [order.id],
+    )
+
+    // Create trade record
+    const tradeId = randomUUID()
+    await client.query(
+      "INSERT INTO trades (id, buy_order_id, sell_order_id, price, quantity, buyer_id, seller_id) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+      [
+        tradeId,
+        order.side === OrderSide.BUY ? order.id : "LIMIT_ORDER",
+        order.side === OrderSide.SELL ? order.id : "LIMIT_ORDER",
+        executedPrice,
+        remainingQuantity,
+        order.side === OrderSide.BUY ? order.user_id : "LIMIT_ORDER",
+        order.side === OrderSide.SELL ? order.user_id : "LIMIT_ORDER",
+      ],
+    )
+
+    // Publish events
+    await redisPub.publish(
+      "order:events",
+      JSON.stringify({
+        type: EventType.ORDER_FILLED,
+        orderId: order.id,
+        userId: order.user_id,
+        executedPrice,
+        executedQuantity: remainingQuantity,
+      }),
+    )
+
+    await client.query("COMMIT")
+    console.log(`Filled limit order ${order.id} at price ${executedPrice}`)
+  } catch (error) {
+    await client.query("ROLLBACK")
+    console.error("Error filling limit order:", error)
+  } finally {
+    client.release()
+  }
+}
+
 async function processOrder(orderId: string, command: any) {
   try {
     console.log(" Processing order:", orderId, command)
+    // If limit order, store it and don't execute immediately
+    if (command.type === OrderType.LIMIT) {
+      await pool.query(
+        "INSERT INTO limit_orders (id, user_id, side, price, quantity, status) VALUES ($1, $2, $3, $4, $5, $6)",
+        [orderId, command.userId, command.side, command.price, command.quantity, "OPEN"],
+      )
+
+      await redisPub.publish(
+        "order:events",
+        JSON.stringify({
+          type: EventType.ORDER_PLACED,
+          orderId,
+          userId: command.userId,
+          orderType: OrderType.LIMIT,
+          price: command.price,
+          quantity: command.quantity,
+        }),
+      )
+
+      console.log(`Limit order ${orderId} placed at price ${command.price}`)
+      return
+    }
 
     const client = await pool.connect()
     let executedPrice = 0 // Declare executedPrice variable
@@ -186,9 +326,18 @@ async function start() {
       const priceData = JSON.parse(message)
       currentPrice = priceData.price
       // console.log(" Price updated:", currentPrice)
+      checkAndFillLimitOrders(currentPrice)
     })
 
-    console.log("Subscribed to order:commands and price:updates channels")
+    await redisSub.subscribe("order-book:update", (message) => {
+
+      const bookData = JSON.parse(message)
+
+      orderBook = bookData
+
+    })
+
+    console.log("Subscribed to order:commands, price:updates, and order-book:update channels")
 
     app.listen(PORT, () => {
       console.log(`Execution Service running on port ${PORT}`)
