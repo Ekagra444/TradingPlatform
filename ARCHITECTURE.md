@@ -1,4 +1,3 @@
-Complete internal documentation for future reference and maintenance
 # Real-Time Trading Platform - Architecture Documentation
 
 **For**: Internal reference and future maintenance

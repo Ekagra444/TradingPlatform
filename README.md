@@ -1,4 +1,3 @@
-Complete rewrite with comprehensive user-facing documentation
 # Real-Time Cryptocurrency Trading Platform
 
 A production-ready event-driven trading platform for real-time cryptocurrency trading with instant order execution, live price charts, and persistent candlestick data storage.
