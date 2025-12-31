@@ -93,5 +93,64 @@ router.get("/trades", authenticate, async (req: AuthRequest, res) => {
     res.status(500).json({ error: "Failed to get trades" })
   }
 })
+router.get("/limit-orders", authenticate, async (req: AuthRequest, res) => {
+  try {
+    const result = await pool.query(
+      "SELECT * FROM limit_orders WHERE user_id = $1 AND status != 'CANCELLED' ORDER BY created_at DESC",
+      [req.userId],
+    )
+
+    const orders = result.rows.map((row) => ({
+      id: row.id,
+      userId: row.user_id,
+      side: row.side,
+      price: Number.parseFloat(row.price),
+      quantity: Number.parseFloat(row.quantity),
+      filledQuantity: Number.parseFloat(row.filled_quantity),
+      status: row.status,
+      createdAt: row.created_at,
+    }))
+
+    res.json(orders)
+  } catch (error) {
+    console.error("Get limit orders error:", error)
+    res.status(500).json({ error: "Failed to get limit orders" })
+  }
+})
+
+router.post("/:orderId/cancel", authenticate, async (req: AuthRequest, res) => {
+  try {
+    const { orderId } = req.params
+
+    // Verify ownership
+    const result = await pool.query("SELECT user_id FROM limit_orders WHERE id = $1", [orderId])
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Order not found" })
+    }
+
+    if (result.rows[0].user_id !== req.userId) {
+      return res.status(403).json({ error: "Unauthorized" })
+    }
+
+    // Update order status
+    await pool.query("UPDATE limit_orders SET status = $1, updated_at = NOW() WHERE id = $2", ["CANCELLED", orderId])
+
+    const redis = await getRedisClient()
+    await redis.publish(
+      "order:events",
+      JSON.stringify({
+        type: "ORDER_CANCELLED",
+        orderId,
+        userId: req.userId,
+      }),
+    )
+
+    res.json({ message: "Order cancelled successfully" })
+  } catch (error) {
+    console.error("Cancel order error:", error)
+    res.status(500).json({ error: "Failed to cancel order" })
+  }
+})
 
 export default router
