@@ -7,6 +7,7 @@ import authRoutes from "./routes/auth"
 import orderRoutes from "./routes/orders"
 import userRoutes from "./routes/user"
 import marketRoutes from "./routes/market"
+import chatRoutes from "./routes/market"
 
 let redisClient: ReturnType<typeof createClient> | null = null
 
@@ -47,6 +48,7 @@ app.use("/api/auth", authRoutes)
 app.use("/api/orders", orderRoutes)
 app.use("/api/user", userRoutes)
 app.use("/api/market", marketRoutes)
+app.use("/api/chat",chatRoutes)
 
 app.get("/health", (req, res) => {
   res.json({ status: "healthy", service: "api-gateway" })
